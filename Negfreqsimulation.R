@@ -9,7 +9,7 @@
 #   poptransmit: pool and redistribute the pathogens in the population
 #   round: one round of this process
 
-library(rlist) 
+library(rlist)
 
 unbind <- function(seq) {unlist(strsplit(seq, ""))}
 rebind <- function(chars) {paste(chars, collapse = "")}
@@ -40,7 +40,7 @@ examplepop <- newpop(5, 5, 20, 10)
 #==========Hosts get rid of some pathogens==========
 
 snips <- function (tosnip, sniplen, start) {rebind(tosnip[start:(start+sniplen-1)])}
-  
+
 snipper <- function(chars, len) {
   snipnum <- length(chars) - len + 1
   lapply(1:snipnum, function (snipnum) snips(chars, len, snipnum))
