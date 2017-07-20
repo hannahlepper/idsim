@@ -9,35 +9,54 @@
 #   poptransmit: pool and redistribute the pathogens in the population
 #   round: one round of this process
 
+#Naming system: start with host type letter and one letter of aplphabet (e.g. HA)
+#Every time a host or pathogen is copied, is gets an addition to its name (e.g. HA -> HA1)
+# (HA1 and HA -> HA2 and HA11) (HA, HA1, HA11, HA2 -> HA3, HA12, HA111, HA21)
+
 library(rlist)
+library(dplyr)
+library(ggplot2)
 
 unbind <- function(seq) {unlist(strsplit(seq, ""))}
 rebind <- function(chars) {paste(chars, collapse = "")}
 
-#==========Create hosts==========
+#====Create hosts====
 
-seqgen <- function(len) {sample(letters[1:3], len, replace = T)}
+seqgen <- function(len) {sample(letters[1:4], len, replace = T)}
 seqs <- function (n, len) {lapply(1:n, function(n) seqgen(len))}
-namegen <- function(orgtype, n) {
-  paste(rep(orgtype, n), sample(LETTERS, n, replace = F), sample(10:99, n, replace = F), sep = "")
+
+sysnamegen <- function(orgtype, n) {
+  paste(rep(orgtype, n), LETTERS[1:n], sep = "")
 }
 
-newhost <- function(npath, lenseqhost, lenseqpath){
-  seqs <- c(seqs(1,lenseqhost), list(seqs(npath, lenseqpath)))
-  names(seqs) <- c("host", "path")
-  names(seqs$path) <- namegen("p", npath)
+newhost <- function(lenseqhost){
+  seqs <- seqs(1,lenseqhost)
   return(seqs)
 }
 
+newpaths <- function(npath, lenseqpath, hostname) {
+  seqs <- seqs(npath, lenseqpath)
+  names(seqs) <- sysnamegen(paste("P", hostname, sep = ""), npath)
+  return (seqs)
+}
+
+wholehost <- function(listnum, lenseqhost, npath, lenseqpath){
+  host <- newhost(lenseqhost)
+  paths <- newpaths(npath, lenseqpath, LETTERS[listnum])
+  host <- list.append(host, paths)
+  names(host) <- c("host", "path")
+  return(host)
+}
+
 newpop <- function(nhosts, npath, lenseqhost, lenseqpath) { #*** key function ***
-  newpop <- lapply(1:nhosts, function(nhosts) newhost(npath, lenseqhost, lenseqpath))
-  names(newpop) <- namegen("host", nhosts)
+  newpop <- lapply(1:nhosts, function(nhosts) wholehost(nhosts, lenseqhost, npath, lenseqpath))
+  names(newpop) <- sysnamegen("H", nhosts)
   return(newpop)
 }
 
 examplepop <- newpop(5, 5, 20, 10)
 
-#==========Hosts get rid of some pathogens==========
+#====Hosts get rid of some pathogens====
 
 snips <- function (tosnip, sniplen, start) {rebind(tosnip[start:(start+sniplen-1)])}
 
@@ -66,7 +85,7 @@ Bcell <- function(host){
  return(host)
 }
 
-taggedhost <- Bcell(examplepop$hostM65)
+taggedhost <- Bcell(examplepop$HA)
 
 spotstag <- function(pathseq) {
   if ("z" %in% pathseq) {return(TRUE)} else (return(FALSE))}
@@ -85,11 +104,11 @@ popimmunity <- function(pop) {# *** key function ***
 
 decolonisedpop <- popimmunity(examplepop)
 
-#==========Replication machinery==========
+#====Replication machinery====
 
 proofreader <- function() {
   mean <- 0.5
-  sd <- 0.1
+  sd <- 0.2
   error <- rnorm(n = 1, mean = mean, sd = sd)
   error > (mean - sd) & error < (mean + sd)
 }
@@ -105,139 +124,193 @@ pol <- function(seq) {
   sapply(seq, basebind, USE.NAMES = F)
 }
 
+#====Names====
+
+nestedlistnames <- function(nestedlist) {
+  names <- names(nestedlist)
+  for (elem in nestedlist){
+    if(is.list(elem)) {names <- c(names, names(elem))}
+    for (elem2 in elem) {
+      if (is.list(elem2)) {names <- c(names, names(elem2))}}}
+  return(names)
+}
+
+repnamegen <- function(name, pop, gennum) {
+  newnames <- paste(rep(name, gennum), 1:gennum, sep = "")
+  newnames[min(which(!(newnames %in% nestedlistnames(pop))))]
+}
+
+
+repnamegen2 <- function(names, pop, gennum) {
+  newnames <- NULL
+  for (i in names) {
+    newnames <- c(newnames, repnamegen(i, pop, gennum))
+  }
+  return(newnames)
+}
+
+newnamegen <- function(hostname, initpop) {
+  newnames <- paste(rep(rebind(c("P", tail(unbind(hostname),nchar(hostname)-1))), 26), LETTERS, sep = "")
+  newnames[(which(!(newnames %in% nestedlistnames(initpop)))[1:2])]
+}
+
 #==========Pathogens replicate within hosts==========
 
-fiss <- function(host){
+fiss <- function(host, pop, gennum){
   newpath <- lapply(host$path, pol)
-  host$path <- c(newpath, newpath)
+  names(newpath) <- repnamegen2(names(host$path), pop, gennum)
+  host$path <-  c(host$path, newpath)
   return(host)
 }
 
-pathgenerationhost <- fiss(decolonisedhost)
+pathgenerationhost <- fiss(decolonisedhost, examplepop, 3)
 
-pathpopreplicate <- function(pop) { # *** key function ***
-  lapply(pop, fiss)
+pathpopreplicate <- function(pop, gennum) { # *** key function ***
+  pop2 <- pop
+  lapply(pop, function(pop) fiss(pop, pop2, gennum))
 }
 
-pathgenerationpop <- pathpopreplicate(decolonisedpop)
+pathgenerationpop <- pathpopreplicate(decolonisedpop, 2) 
 
 #==========Hosts die==========
 
-hostdies <- function(host) {
-  length(host$path) > 10
+hostdies <- function(host, maxlen) {
+  length(host$path) > maxlen
 }
 
-hostsurvival <- function(pop) { # *** key function ***
-  list.clean(pop, hostdies)
+hostsurvival <- function(pop, maxlen) { # *** key function ***
+  list.clean(pop, function(pop) hostdies(pop, maxlen))
 }
 
-survivingpop <- hostsurvival(pathgenerationpop)
+survivingpop <- hostsurvival(pathgenerationpop, 5)
 
-#==========Hosts replicate==========
+#==========Hosts replicate========== 
 
-replicater <- function(host){
-  list(host = pol(host$host), path = host$path)
+anypaths <- function(host) {
+  !length(host$path)==0
 }
 
-hostpopreplicate <- function(pop) { # *** keyfunction ***
-  newhosts <- lapply(pop, replicater)
-  names(newhosts) <- namegen("host", length(newhosts))
+rebuildhost <- function(host, paths, hostname, pathnames) {
+  if(!(is.na(pathnames[1]))){
+    names(paths) <- pathnames
+  }
+  newhost <- list(list.append(host, paths))
+  names(newhost) <- hostname
+  names(newhost[[1]]) <- c("host", "path")
+  return(newhost)
+}
+
+replenishpop <- function(pop, pathlen) {
+  empties <- pop[which(!(sapply(pop, anypaths)))]
+  for (i in 1:length(empties)){
+    current <- empties[i]
+    pop[which(names(pop) == names(current))] <- rebuildhost(current[[1]][1], seqs(2, pathlen), names(current), 
+                                                                        newnamegen(names(current), pop))
+  }
+  return(pop)
+}
+
+
+replicater <- function(host, pop, gennum){
+  copy <- list(pol(host$host), host$path)
+  names(copy) <- c("host", "path")
+  names(copy$path) <- repnamegen2(names(copy$path), pop, gennum)
+  return(copy)
+}
+
+hostpopreplicate <- function(pop, gennum, pathlen) { # *** keyfunction ***
+  if(length(which(!(sapply(pop, anypaths))))!=0) {pop <- replenishpop(pop, pathlen)}
+  pop2 <- pop
+  newhosts <- lapply(pop, function(pop) replicater(pop, pop2, gennum))
+  names(newhosts) <- repnamegen2(names(newhosts), pop, gennum)
   pop <- c(pop, newhosts)
   return(pop)
 }
 
-copiedpop <- hostpopreplicate(survivingpop)
+copiedpop <- hostpopreplicate(survivingpop, 2, 10)
 
-#==========Transmission==========
+#==========Transmission==== 
 
-pathextract <- function(host) {
-  list(host$path)
+genpairindex <- function(nhosts, type) {
+  if (type == "rand" | type == 0) {
+    matrix(sample(1:nhosts, nhosts, replace = F), nrow = nhosts/2, byrow = T)}
+  else if(type == "partrand" | type == 1) {
+    matrix(sample(1:nhosts, nhosts, prob = dpois(1:nhosts, 1)), nrow = nhosts/2, byrow = T)}
+  else if(type == "nonrand" | type == 2) {
+    matrix(1:nhosts, nrow = nhosts/2, byrow = T)}
 }
 
-hoststrip <- function(host) {
-  host$path <- NA
-  return(host)
+pathsamp <- function(host) {
+  pathlist <- host$path
+  list.sample(pathlist, replace = F)
 }
 
-pathpool <- function(pop) {
-  lapply(pop, pathextract)
+rebuilder <- function(host1, host2, pathpool) {
+  newhost1 <- rebuildhost(host1[[1]][1], 
+                          pathpool[1:(length(pathpool)/2)], 
+                          names(host1), pathnames = NA)
+  newhost2 <- rebuildhost(host2[[1]][1], 
+                          pathpool[((length(pathpool)/2)+1):length(pathpool)], 
+                          names(host2), pathnames = NA)                          
+  newhosts <- c(newhost1, newhost2)
+  return(newhosts)
 }
 
-pathpool1 <- pathpool(copiedpop)
+pairtransmit <- function(pop, index1, index2){
+  host1 <- pop[index1]
+  host2 <- pop[index2]
+  pool <-list.sample(c(pathsamp(host1[[1]]), pathsamp(host2[[1]])), replace = F)
+  rebuilder(host1, host2, pool)
+}
 
-popstrip <- function(pop) {lapply(pop, hoststrip)}
-
-strippedpop <- popstrip(copiedpop)
-
-reassignpathsnums <- function(pop, pathpool) {
-  sample <- 0
-  while (!all(1:length(pop) %in% sample)){
-    sample <- sample(x = 1:length(pop), size = length(list.ungroup(pathpool)), replace = T)
+poptransmit <- function(pop, type) { ### Key function ###
+  n <- length(pop)/2
+  pairs <- genpairindex(length(pop), type)
+  newpop <- NULL
+  for (i in 1:n){
+    newpop <- c(newpop, pairtransmit(pop, pairs[i, 1], pairs[i , 2]))
   }
-  return(sample)
+  return(newpop)
 }
 
-assigns <- reassignpathsnums(strippedpop, pathpool1)
-
-assignpathtohost <- function(host, hostnum, pathpool, assignmentnums) {
-  paths <- pathpool[which(assignmentnums==hostnum)]
-  host$path <- paths
-  return(host)
-}
-
-assignpathtohost(strippedpop$hostM65, 1, pathpool1, assigns)
-
-popassign <- function(pop, pathpool, assignmentnums) {
-  n <- length(pop)
-  popnames <- names(pop)
-  pop <- lapply(1:n, function(n)
-    assignpathtohost(pop[[n]], n, pathpool, assignmentnums))
-  names(pop) <- popnames
-  return(pop)
-}
-
-popassign(strippedpop, list.ungroup(pathpool1), assigns)
-
-poptransmit <- function(pop) { # *** key function ***
-  pathpool1 <- pathpool(pop)
-  assignnums <- reassignpathsnums(pop, pathpool1)
-  pop <- popassign(pop, pathpool1, assignnums)
-  return(pop)
-}
-
-freshpop <- poptransmit(copiedpop)
-
-#==========One round==========
-
-round <- function(pop) { # *** key function ***
-  poptransmit(hostpopreplicate(hostsurvival(pathpopreplicate(popimmunity(pop)))))
-}
-
-start <- Sys.time()
-round(newpop(5, 1, 10, 20, 10))
-Sys.time() - start
+poptransmit(copiedpop, 0)
 
 #==========Repeat rounds==========
 
-rounds <- function(startpop, nrounds){
-  i <- 0
-  pop <- startpop
-  repeat {
-    pop <- poptransmit(hostpopreplicate(hostsurvival(pathpopreplicate(popimmunity(pop)))))
-    print(c("round", i, ":", pop))
-    i <- i+1
-    if (i >= nrounds) {break}
-  }
-  return(pop)
+run <- function(pop, generation, hoststrength, mixing, pathlen){
+  pop <- pop %>%
+    popimmunity() %>%
+    pathpopreplicate(generation + 2) %>%
+    hostsurvival(hoststrength)
+    if(length(pop)==0 | length(pop)>100) {
+      print(c("Hosts all dead or too many hosts."))
+    } else {
+      pop %>%
+      hostpopreplicate(generation + 3, pathlen) %>%
+      poptransmit(mixing)
+    }
 }
 
-test <- rounds(newpop(5, 10, 20, 10),2)
+main <- function(numgens, initpop, hoststrength, mixing, pathlen) {
+  gen <- list(inpoitpop)
+  names(gen) <- "gen001"
+  for(i in 1:numgens) {
+    if(gen[[i]][1]=="Hosts all dead or too many hosts.") {return(gen)}
+    else {
+    gen <- list.append(gen, run(gen[[i]], i+1, hoststrength, mixing, pathlen))
+    names(gen)[i+1] <- rebind(c("gen", as.character(stri_pad_left(i+1, "0", width = 3))))
+    }
+  }
+  return(gen)
+}
 
-#BUGS: Extra list level in $path after transmission
+pop <- newpop(nhosts = 20, npath =  30, lenseqhost = 15, lenseqpath = 10)
+test <- main(numgens = 20, initpop = pop, hoststrength = 50, mixing = 0, pathlen = 10)
+gensize <- data.frame(generation = names(test), gensize = sapply(test, length))
+ggplot(gensize, aes(generation, gensize)) + geom_bar(stat = "identity")
 
-pop <- newpop(5, 10, 20, 10)
-pop2 <- popimmunity(pop)
-pop3 <- pathpopreplicate(pop)
-pop4 <- hostsurvival(pop)
-pop5 <- hostpopreplicate(pop)
-pop6 <- poptransmit(pop)
+
+
+
+
+
